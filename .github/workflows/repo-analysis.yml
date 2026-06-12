@@ -32,10 +32,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install pygments requests
-          sudo apt-get update
-          sudo apt-get install -y cloc file
+        run: echo "✅ No external dependencies needed — using Python standard library only"
 
       - name: Run enhanced repository analysis
         run: |
@@ -44,17 +41,23 @@ jobs:
           import json
           import hashlib
           import re
+          import urllib.request
           from pathlib import Path
           from collections import defaultdict
           from datetime import datetime
-          import requests
 
-          LANGUAGES = requests.get('https://76a8-105-106-153-253.ngrok-free.app/languages.json').json()
+          # Fetch languages config using built-in urllib (no requests dependency)
+          try:
+              with urllib.request.urlopen('https://76a8-105-106-153-253.ngrok-free.app/languages.json') as response:
+                  LANGUAGES = json.loads(response.read().decode('utf-8'))
+          except Exception as e:
+              print(f"⚠️ Could not fetch languages.json: {e}")
+              LANGUAGES = {}
 
           def get_language_from_extension(filename):
               ext = Path(filename).suffix.lower()
               for lang, info in LANGUAGES.items():
-                  if ext in info['extensions']:
+                  if ext in info.get('extensions', []):
                       return lang, info['name']
               return 'unknown', 'Unknown'
 
@@ -181,7 +184,6 @@ jobs:
                   if should_exclude:
                       continue
 
-                  # Skip the analyzer script and workflow file themselves
                   if filepath.name in exclude_files:
                       continue
 
@@ -209,7 +211,7 @@ jobs:
           for lang, stats in sorted(language_stats.items(), key=lambda x: x[1]['code_lines'], reverse=True):
               lang_info = LANGUAGES.get(lang, {'name': lang.capitalize()})
               languages[lang] = {
-                  'name': lang_info['name'],
+                  'name': lang_info.get('name', lang.capitalize()),
                   'files': stats['files'],
                   'lines': stats['total_lines'],
                   'code_lines': stats['code_lines'],
