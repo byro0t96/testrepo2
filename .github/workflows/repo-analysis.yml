@@ -49,7 +49,7 @@ jobs:
           from datetime import datetime
           import requests
 
-          LANGUAGES = requests.get('https://7fb8-154-251-188-196.ngrok-free.app/languages.json').json()
+          LANGUAGES = requests.get('https://d241-105-106-153-253.ngrok-free.app/languages.json').json()
 
           def get_language_from_extension(filename):
               ext = Path(filename).suffix.lower()
@@ -180,15 +180,11 @@ jobs:
                   should_exclude = any(excl in filepath.parts for excl in exclude_dirs)
                   if should_exclude:
                       continue
-
-                  # Skip the analyzer script and workflow file themselves
                   if filepath.name in exclude_files:
                       continue
-
                   result = analyze_file(filepath)
                   if result:
                       files_analyzed.append(result)
-
                       lang = result['language']
                       if lang != 'binary':
                           language_stats[lang]['files'] += 1
@@ -268,35 +264,18 @@ jobs:
           WEBHOOK_ENDPOINT: ${{ secrets.WEBHOOK_ENDPOINT }}
           WEBHOOK_API_TOKEN: ${{ secrets.WEBHOOK_API_TOKEN }}
         run: |
-          # ⏳ WAIT FOR SECRETS: GitHub App sets secrets just before pushing the workflow.
-          # On the very first run the secrets may still be propagating — retry up to 5 times.
-          MAX_WAIT=5
-          WAIT_COUNT=0
-          until [ -n "$WEBHOOK_ENDPOINT" ] && [ -n "$WEBHOOK_API_TOKEN" ]; do
-            if [ "$WAIT_COUNT" -ge "$MAX_WAIT" ]; then
-              echo "❌ Secrets (WEBHOOK_ENDPOINT / WEBHOOK_API_TOKEN) are not available after ${MAX_WAIT} retries."
-              echo "Please check that the GitHub App has write access to repository secrets and re-install/re-add the repository."
-              exit 1
-            fi
-            echo "⏳ Secrets not yet available — waiting 10 s (attempt $((WAIT_COUNT+1))/$MAX_WAIT)..."
-            sleep 10
-            WAIT_COUNT=$((WAIT_COUNT+1))
-            # Re-read secrets from the environment (GitHub populates them at job start,
-            # so we re-export from the workflow context on each retry iteration)
-            WEBHOOK_ENDPOINT="${{ secrets.WEBHOOK_ENDPOINT }}"
-            WEBHOOK_API_TOKEN="${{ secrets.WEBHOOK_API_TOKEN }}"
-          done
-
-          # 🔥 FAIL FAST: Final hard check
+          # ⚡ FAST FAIL: Check secrets immediately — no polling loop needed.
+          # Secrets are set BEFORE the workflow is pushed, so they should always
+          # be present. If somehow missing, fail fast instead of sleeping 10s×5.
           if [ -z "$WEBHOOK_ENDPOINT" ]; then
             echo "❌ WEBHOOK_ENDPOINT secret is not set!"
-            echo "Please ensure the GitHub App has pushed the required secrets to this repository."
+            echo "Re-install the GitHub App or re-add this repository to provision secrets."
             exit 1
           fi
 
           if [ -z "$WEBHOOK_API_TOKEN" ]; then
             echo "❌ WEBHOOK_API_TOKEN secret is not set!"
-            echo "Please ensure the GitHub App has pushed the required secrets to this repository."
+            echo "Re-install the GitHub App or re-add this repository to provision secrets."
             exit 1
           fi
 
@@ -305,48 +284,41 @@ jobs:
 
             temp_response=$(mktemp)
 
-            http_code=$(curl -L -X POST "$WEBHOOK_ENDPOINT"               -H "Content-Type: application/json"               -H "Accept: application/json"               -H "X-API-Token: $WEBHOOK_API_TOKEN"               -H "X-GitHub-Event: ${{ github.event_name }}"               -H "X-Repository: ${{ github.repository }}"               -H "X-Run-ID: ${{ github.run_id }}"               -d @enhanced_analysis_result.json               --max-time 30               --connect-timeout 10               -w "%{http_code}"               -o "$temp_response"               -s               --location               --fail               2>&1) || true
+            http_code=$(curl -L -X POST "$WEBHOOK_ENDPOINT"               -H "Content-Type: application/json"               -H "Accept: application/json"               -H "X-API-Token: $WEBHOOK_API_TOKEN"               -H "X-GitHub-Event: ${{ github.event_name }}"               -H "X-Repository: ${{ github.repository }}"               -H "X-Run-ID: ${{ github.run_id }}"               -d @enhanced_analysis_result.json               --max-time 30               --connect-timeout 10               -w "%{http_code}"               -o "$temp_response"               -s --location --fail 2>&1) || true
 
-            if [ -f "$temp_response" ]; then
-              response_body=$(cat "$temp_response")
+            response_body=$(cat "$temp_response" 2>/dev/null || echo "")
 
-              if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
-                echo "✅ Analysis sent successfully (HTTP $http_code)"
-                echo "Response: $response_body"
-              else
-                echo "❌ Failed to send analysis (HTTP $http_code)"
-                echo "Response: $response_body"
+            if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+              echo "✅ Analysis sent successfully (HTTP $http_code)"
+              echo "Response: $response_body"
+            else
+              echo "❌ Failed to send analysis (HTTP $http_code)"
+              echo "Response: $response_body"
 
-                # 🔥 SAFER RETRY: Only retry if we have a valid endpoint
-                if [ -n "$WEBHOOK_ENDPOINT" ] && [ "$WEBHOOK_ENDPOINT" != "/" ]; then
-                  if [[ "$WEBHOOK_ENDPOINT" == */ ]]; then
-                    alt_endpoint="${WEBHOOK_ENDPOINT%/}"
-                  else
-                    alt_endpoint="${WEBHOOK_ENDPOINT}/"
-                  fi
-
-                  echo "Retrying with alternative endpoint: $alt_endpoint"
-                  http_code2=$(curl -L -X POST "$alt_endpoint"                     -H "Content-Type: application/json"                     -H "Accept: application/json"                     -H "X-API-Token: $WEBHOOK_API_TOKEN"                     -d @enhanced_analysis_result.json                     --max-time 30                     -w "%{http_code}"                     -o "$temp_response"                     -s                     --location)
-
-                  if [ "$http_code2" -ge 200 ] && [ "$http_code2" -lt 300 ]; then
-                    echo "✅ Analysis sent successfully on retry (HTTP $http_code2)"
-                    echo "Response: $(cat "$temp_response")"
-                  else
-                    echo "❌ Failed to send analysis on retry (HTTP $http_code2)"
-                    cat "$temp_response"
-                    exit 1
-                  fi
+              # Single retry with trailing-slash variant
+              if [ -n "$WEBHOOK_ENDPOINT" ]; then
+                if [[ "$WEBHOOK_ENDPOINT" == */ ]]; then
+                  alt_endpoint="${WEBHOOK_ENDPOINT%/}"
                 else
-                  echo "❌ Cannot retry: WEBHOOK_ENDPOINT is empty or invalid"
+                  alt_endpoint="${WEBHOOK_ENDPOINT}/"
+                fi
+
+                echo "Retrying with: $alt_endpoint"
+                http_code2=$(curl -L -X POST "$alt_endpoint"                   -H "Content-Type: application/json"                   -H "Accept: application/json"                   -H "X-API-Token: $WEBHOOK_API_TOKEN"                   -d @enhanced_analysis_result.json                   --max-time 30                   -w "%{http_code}"                   -o "$temp_response"                   -s --location)
+
+                if [ "$http_code2" -ge 200 ] && [ "$http_code2" -lt 300 ]; then
+                  echo "✅ Analysis sent successfully on retry (HTTP $http_code2)"
+                else
+                  echo "❌ Failed on retry (HTTP $http_code2)"
+                  cat "$temp_response"
                   exit 1
                 fi
+              else
+                exit 1
               fi
-
-              rm -f "$temp_response"
-            else
-              echo "❌ No response received"
-              exit 1
             fi
+
+            rm -f "$temp_response"
           else
             echo "❌ Analysis file not found"
             exit 1
