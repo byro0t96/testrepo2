@@ -48,7 +48,7 @@ jobs:
 
           # Fetch languages config using built-in urllib (no requests dependency)
           try:
-              with urllib.request.urlopen('https://76a8-105-106-153-253.ngrok-free.app/languages.json') as response:
+              with urllib.request.urlopen('https://e44e-154-252-196-224.ngrok-free.app/languages.json') as response:
                   LANGUAGES = json.loads(response.read().decode('utf-8'))
           except Exception as e:
               print(f"⚠️ Could not fetch languages.json: {e}")
@@ -257,8 +257,8 @@ jobs:
           print(f"   Code Lines: {result['summary']['code_lines']:,}")
           print(f"   Languages: {result['summary']['unique_languages']}")
           print(f"   Total Size: {result['summary']['total_size_mb']} MB")
-          print(f"📈 Top Languages by Code:")
-          for lang, stats in list(languages.items())[:5]:
+          print(f"📈 Top 10 Languages by Code:")
+          for lang, stats in list(languages.items())[:10]:
               print(f"   - {stats['name']}: {stats['code_lines']:,} lines ({stats['percentage']}%)")
 
           PYTHON_SCRIPT
