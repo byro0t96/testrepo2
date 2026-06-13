@@ -46,7 +46,6 @@ jobs:
           from collections import defaultdict
           from datetime import datetime
 
-          # Fetch languages config using built-in urllib (no requests dependency)
           try:
               with urllib.request.urlopen('https://e44e-154-252-196-224.ngrok-free.app/languages.json') as response:
                   LANGUAGES = json.loads(response.read().decode('utf-8'))
