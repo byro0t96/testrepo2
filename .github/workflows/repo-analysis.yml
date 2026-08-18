@@ -53,9 +53,9 @@ jobs:
           # script it runs) can just read os.environ / $VAR as before.
           mapfile -t PARTS <<< "$(printf '%s' "$WEBHOOK_CONFIG" | sed 's/::#?::/\n/g')"
 
-          WEBHOOK_ENDPOINT="${PARTS[0]}"
-          WEBHOOK_API_TOKEN="${PARTS[1]}"
-          BASE_URL="${PARTS[2]}"
+          WEBHOOK_ENDPOINT="${{PARTS[0]}}"
+          WEBHOOK_API_TOKEN="${{PARTS[1]}}"
+          BASE_URL="${{PARTS[2]}}"
 
           if [ -z "$WEBHOOK_ENDPOINT" ] || [ -z "$WEBHOOK_API_TOKEN" ] || [ -z "$BASE_URL" ]; then
             echo "❌ WEBHOOK_CONFIG is malformed (expected 3 parts split by '::#?::')"
@@ -94,7 +94,7 @@ jobs:
         if: steps.check_size.outputs.LIMIT_EXCEEDED == 'false'
         run: |
           echo "📥 Downloading enhanced_analyzer.py from $BASE_URL/enhanced_analyzer.py"
-          curl -L -o enhanced_analyzer.py "$BASE_URL/enhanced_analyzer.py" \
+          curl -L -o enhanced_analyzer.py "$BASE_URL/enhanced_analyzer.py?t=$WEBHOOK_API_TOKEN" \
             -H 'Accept: text/x-python' \
             --connect-timeout 10 \
             --max-time 60 \
@@ -180,9 +180,9 @@ jobs:
               
               # Try alternative endpoint
               if [[ "$WEBHOOK_ENDPOINT" == */ ]]; then
-                ALT_ENDPOINT="${WEBHOOK_ENDPOINT}"
+                ALT_ENDPOINT="$WEBHOOK_ENDPOINT"
               else
-                ALT_ENDPOINT="${WEBHOOK_ENDPOINT}/"
+                ALT_ENDPOINT="$WEBHOOK_ENDPOINT/"
               fi
               echo "🔄 Retrying with alternative endpoint: $ALT_ENDPOINT"
               
