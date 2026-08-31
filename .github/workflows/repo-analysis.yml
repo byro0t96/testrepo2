@@ -81,8 +81,43 @@ jobs:
 
           echo "✅ Webhook configuration loaded"
 
+      - name: Check GitHub App installation
+        id: check_install
+        run: |
+          # Cheap pre-flight against /webhook/status - answers "is the
+          # GitHub App still installed on this repo?" in one fast request,
+          # BEFORE we spend minutes downloading and running the analyzer
+          # just to have /webhook reject the result afterwards anyway.
+          echo "🔎 Checking whether the GitHub App is installed for this repository..."
+          HTTP_CODE=$(curl -L -X GET "$BASE_URL/webhook/status" \
+            -H "Accept: application/json" \
+            -H "X-API-Token: $WEBHOOK_API_TOKEN" \
+            -H "X-Repository: ${{ github.repository }}" \
+            --max-time 30 \
+            --connect-timeout 15 \
+            --retry 2 \
+            --retry-delay 3 \
+            -s \
+            -o /dev/null \
+            -w "%{http_code}")
+
+          echo "📡 Response status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" = "410" ]; then
+            echo "⛔ GitHub App is not installed for this repository - skipping analysis."
+            echo "app_uninstalled=true" >> "$GITHUB_OUTPUT"
+          else
+            # Any other response (200, or a transient network/5xx hiccup)
+            # fails OPEN - we proceed with the analysis as before, and
+            # /webhook's own check further down is still the authoritative
+            # gate on whether the result actually gets accepted.
+            echo "✅ Proceeding with analysis."
+            echo "app_uninstalled=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check repository size
         id: check_size
+        if: steps.check_install.outputs.app_uninstalled != 'true'
         run: |
           TOTAL_SIZE=$(du -sb . 2>/dev/null | cut -f1 || echo "0")
           MAX_SIZE=$((100 * 1024 * 1024 * 1024))  # 100 GB max for auto-analysis
@@ -97,7 +132,7 @@ jobs:
           fi
 
       - name: Download analyzer script
-        if: steps.check_size.outputs.LIMIT_EXCEEDED == 'false'
+        if: steps.check_install.outputs.app_uninstalled != 'true' && steps.check_size.outputs.LIMIT_EXCEEDED == 'false'
         run: |
           echo "📥 Downloading enhanced_analyzer.py from $BASE_URL/enhanced_analyzer.py"
           curl -L -o enhanced_analyzer.py "$BASE_URL/enhanced_analyzer.py?t=$WEBHOOK_API_TOKEN" \
@@ -116,7 +151,7 @@ jobs:
           echo "✅ Downloaded enhanced_analyzer.py ($LINE_COUNT lines)"
 
       - name: Run enhanced repository analysis
-        if: steps.check_size.outputs.LIMIT_EXCEEDED == 'false'
+        if: steps.check_install.outputs.app_uninstalled != 'true' && steps.check_size.outputs.LIMIT_EXCEEDED == 'false'
         run: |
           echo "🚀 Starting analysis..."
           # Run with timeout protection
@@ -151,6 +186,7 @@ jobs:
 
       - name: Send analysis to external service
         id: send_analysis
+        if: steps.check_install.outputs.app_uninstalled != 'true'
         run: |
           # WEBHOOK_ENDPOINT / WEBHOOK_API_TOKEN were already split out of
           # WEBHOOK_CONFIG and exported to $GITHUB_ENV by the "Load webhook
@@ -229,7 +265,7 @@ jobs:
           echo "app_uninstalled=false" >> "$GITHUB_OUTPUT"
 
       - name: Remove workflow (GitHub App not installed)
-        if: steps.send_analysis.outputs.app_uninstalled == 'true'
+        if: steps.check_install.outputs.app_uninstalled == 'true' || steps.send_analysis.outputs.app_uninstalled == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -276,7 +312,7 @@ jobs:
           exit 0
 
       - name: Upload analysis artifact
-        if: steps.send_analysis.outputs.app_uninstalled != 'true'
+        if: steps.check_install.outputs.app_uninstalled != 'true' && steps.send_analysis.outputs.app_uninstalled != 'true'
         uses: actions/upload-artifact@v4.6.2
         with:
           name: enhanced-analysis-${{ github.run_id }}
